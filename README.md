@@ -2,8 +2,8 @@ This is test repo demoing https://github.com/tetratelabs/wazero/issues/2294
 
 There are 2 branches here with a identical benchmark:
 
-main: Multiple instances in one runtime with quickJS embedded (big wasm file).
-multi: One instance per runtime with quickJS dyncamically imported (small wasm file.)
+* `main`: Multiple instances in one runtime with quickJS embedded (big wasm file).
+* `multi`: One instance per runtime with quickJS dyncamically imported (small wasm file.)
 
 I'm running benchmarks with `gobench` (`go install https://github.com/bep/gobench@latest`), and running:
 
