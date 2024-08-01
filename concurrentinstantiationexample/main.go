@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"log"
-	"sync"
 
 	"github.com/tetratelabs/wazero"
 )
@@ -16,7 +15,7 @@ import (
 //go:embed testdata/add.wasm
 var addWasm []byte
 
-func OneRuntime(goroutines int) {
+func OneRuntime(instances int) {
 	// Choose the context to use for function calls.
 	ctx := context.Background()
 
@@ -30,82 +29,64 @@ func OneRuntime(goroutines int) {
 		log.Panicf("failed to compile Wasm binary: %v", err)
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
+	for i := 0; i < instances; i++ {
+		// Instantiate a new Wasm module from the already compiled `compiledWasm`.
+		instance, err := r.InstantiateModule(ctx, compiledWasm, wazero.NewModuleConfig().WithName(""))
+		if err != nil {
+			log.Panicf("[%d] failed to instantiate %v", i, err)
+		}
 
-	// Instantiate the Wasm module from `compiledWsam`, and invoke the exported "add" function concurrently.
-	for i := 0; i < goroutines; i++ {
-		go func(i int) {
-			defer wg.Done()
+		// Calculates "i + i" by invoking the exported "add" function.
+		result, err := instance.ExportedFunction("add").Call(ctx, uint64(i), uint64(i))
+		if err != nil {
+			log.Panicf("[%d] failed to invoke \"add\": %v", i, err)
+		}
 
-			// Instantiate a new Wasm module from the already compiled `compiledWasm`.
-			instance, err := r.InstantiateModule(ctx, compiledWasm, wazero.NewModuleConfig().WithName(""))
-			if err != nil {
-				log.Panicf("[%d] failed to instantiate %v", i, err)
-			}
-
-			// Calculates "i + i" by invoking the exported "add" function.
-			result, err := instance.ExportedFunction("add").Call(ctx, uint64(i), uint64(i))
-			if err != nil {
-				log.Panicf("[%d] failed to invoke \"add\": %v", i, err)
-			}
-
-			// Ensure the addition "i + i" is actually calculated.
-			expected := uint64(i * 2)
-			if result[0] != expected {
-				log.Panicf("expected %d, but got %d", expected, result[0])
-			}
-		}(i)
+		// Ensure the addition "i + i" is actually calculated.
+		expected := uint64(i * 2)
+		if result[0] != expected {
+			log.Panicf("expected %d, but got %d", expected, result[0])
+		}
 	}
-
-	wg.Wait()
 }
 
-func OneRuntimePerInstance(goroutines int) {
+func OneRuntimePerInstance(instances int) {
 	// Choose the context to use for function calls.
 	ctx := context.Background()
 
 	// Set up a compilation cache to store compiled Wasm binaries.
 	compilationCache := wazero.NewCompilationCache()
 
-	var wg sync.WaitGroup
-	wg.Add(goroutines)
-
 	// Instantiate the Wasm module from `compiledWsam`, and invoke the exported "add" function concurrently.
-	for i := 0; i < goroutines; i++ {
-		go func(i int) {
-			defer wg.Done()
+	for i := 0; i < instances; i++ {
+		// Create a new WebAssembly Runtime.
+		rcfg := wazero.NewRuntimeConfig().WithCompilationCache(compilationCache)
+		r := wazero.NewRuntimeWithConfig(ctx, rcfg)
+		defer r.Close(ctx) // This closes everything this Runtime created.
 
-			// Create a new WebAssembly Runtime.
-			rcfg := wazero.NewRuntimeConfig().WithCompilationCache(compilationCache)
-			r := wazero.NewRuntimeWithConfig(ctx, rcfg)
-			defer r.Close(ctx) // This closes everything this Runtime created.
+		// Compile the Wasm binary once so that we can skip the entire compilation time during instantiation.
+		compiledWasm, err := r.CompileModule(ctx, addWasm)
+		if err != nil {
+			log.Panicf("failed to compile Wasm binary: %v", err)
+		}
 
-			// Compile the Wasm binary once so that we can skip the entire compilation time during instantiation.
-			compiledWasm, err := r.CompileModule(ctx, addWasm)
-			if err != nil {
-				log.Panicf("failed to compile Wasm binary: %v", err)
-			}
+		// Instantiate a new Wasm module from the already compiled `compiledWasm`.
+		instance, err := r.InstantiateModule(ctx, compiledWasm, wazero.NewModuleConfig().WithName(""))
+		if err != nil {
+			log.Panicf("[%d] failed to instantiate %v", i, err)
+		}
 
-			// Instantiate a new Wasm module from the already compiled `compiledWasm`.
-			instance, err := r.InstantiateModule(ctx, compiledWasm, wazero.NewModuleConfig().WithName(""))
-			if err != nil {
-				log.Panicf("[%d] failed to instantiate %v", i, err)
-			}
+		// Calculates "i + i" by invoking the exported "add" function.
+		result, err := instance.ExportedFunction("add").Call(ctx, uint64(i), uint64(i))
+		if err != nil {
+			log.Panicf("[%d] failed to invoke \"add\": %v", i, err)
+		}
 
-			// Calculates "i + i" by invoking the exported "add" function.
-			result, err := instance.ExportedFunction("add").Call(ctx, uint64(i), uint64(i))
-			if err != nil {
-				log.Panicf("[%d] failed to invoke \"add\": %v", i, err)
-			}
+		// Ensure the addition "i + i" is actually calculated.
+		expected := uint64(i * 2)
+		if result[0] != expected {
+			log.Panicf("expected %d, but got %d", expected, result[0])
+		}
 
-			// Ensure the addition "i + i" is actually calculated.
-			expected := uint64(i * 2)
-			if result[0] != expected {
-				log.Panicf("expected %d, but got %d", expected, result[0])
-			}
-		}(i)
 	}
-
-	wg.Wait()
 }

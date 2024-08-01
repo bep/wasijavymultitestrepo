@@ -16,7 +16,7 @@ func TestRunOneRuntimePerInstance(t *testing.T) {
 func BenchmarkConcurrentInstantiation(b *testing.B) {
 	runBenchmark := func(b *testing.B, f func(int)) {
 		for _, i := range []int{10, 50, 100, 300} {
-			b.Run(fmt.Sprintf("goroutines=%d", i), func(b *testing.B) {
+			b.Run(fmt.Sprintf("instances=%d", i), func(b *testing.B) {
 				for j := 0; j < b.N; j++ {
 					f(i)
 				}
