@@ -221,10 +221,12 @@ func (call *call[Q, R]) done() {
 }
 
 type Options struct {
-	Ctx              context.Context
-	CompileModule    func(ctx context.Context, r wazero.Runtime, c wazero.ModuleConfig) (func() error, error)
-	CompilationCache wazero.CompilationCache
-	PoolSize         int
+	Ctx                  context.Context
+	ModuleName           string
+	ModuleSource         []byte
+	NeedsQuickJSProvider bool
+	CompilationCache     wazero.CompilationCache
+	PoolSize             int
 }
 
 func Start[Q, R IDGetter](opts Options) (Dispatcher[Q, R], error) {
@@ -232,12 +234,37 @@ func Start[Q, R IDGetter](opts Options) (Dispatcher[Q, R], error) {
 		opts.PoolSize = 1
 	}
 
+	if opts.Ctx == nil {
+		opts.Ctx = context.Background()
+	}
+
 	pool := &dispatcherPool[Q, R]{
 		dispatchers: make([]*dispatcher[Q, R], opts.PoolSize),
 	}
 
+	if opts.CompilationCache == nil {
+		return nil, errors.New("CompilationCache is required")
+	}
+
+	runtimeConfig := wazero.NewRuntimeConfig().WithCompilationCache(opts.CompilationCache)
+	// Compiled modules can be shared across runtimes.
+	r := wazero.NewRuntimeWithConfig(opts.Ctx, runtimeConfig)
+
+	var compiledQuickJS wazero.CompiledModule
+	if opts.NeedsQuickJSProvider {
+		var err error
+		compiledQuickJS, err = r.CompileModule(opts.Ctx, quickjsWasm)
+		if err != nil {
+			return nil, err
+		}
+	}
+	compiledMod, err := r.CompileModule(opts.Ctx, opts.ModuleSource)
+	if err != nil {
+		return nil, err
+	}
+
 	for i := 0; i < opts.PoolSize; i++ {
-		d, err := newDispatcher[Q, R](opts)
+		d, err := newDispatcher[Q, R](opts, runtimeConfig, compiledMod, compiledQuickJS)
 		if err != nil {
 			return nil, err
 		}
@@ -246,20 +273,12 @@ func Start[Q, R IDGetter](opts Options) (Dispatcher[Q, R], error) {
 	return pool, nil
 }
 
-func newDispatcher[Q, R IDGetter](opts Options) (*dispatcher[Q, R], error) {
+func newDispatcher[Q, R IDGetter](opts Options, runtimeConfig wazero.RuntimeConfig, mod, quickjs wazero.CompiledModule) (*dispatcher[Q, R], error) {
 	if opts.Ctx == nil {
 		opts.Ctx = context.Background()
 	}
-	if opts.CompileModule == nil {
-		return nil, errors.New("InstansiateModule is required")
-	}
+
 	ctx := opts.Ctx
-
-	runtimeConfig := wazero.NewRuntimeConfig()
-
-	if opts.CompilationCache != nil {
-		runtimeConfig = runtimeConfig.WithCompilationCache(opts.CompilationCache)
-	}
 
 	// Create a new WebAssembly Runtime.
 	r := wazero.NewRuntimeWithConfig(opts.Ctx, runtimeConfig)
@@ -276,16 +295,13 @@ func newDispatcher[Q, R IDGetter](opts Options) (*dispatcher[Q, R], error) {
 
 	config := wazero.NewModuleConfig().WithStdout(stdout).WithStderr(os.Stderr).WithStdin(stdin)
 
-	run, err := opts.CompileModule(ctx, r, config)
-	if err != nil {
-		return nil, err
-	}
-
 	done := make(chan struct{})
 	go func() {
 		// This will block until stdin is closed.
-		err := run()
-		if err != nil {
+		if _, err := r.InstantiateModule(ctx, quickjs, config.WithName("javy_quickjs_provider_v2")); err != nil {
+			panic(err)
+		}
+		if _, err := r.InstantiateModule(ctx, mod, config.WithName(opts.ModuleName)); err != nil {
 			panic(err)
 		}
 		close(done)
@@ -329,6 +345,20 @@ func printStackTrace(w io.Writer) {
 	buf := make([]byte, 1<<16)
 	runtime.Stack(buf, true)
 	fmt.Fprintf(w, "%s", buf)
+}
+
+func instanceFunc(name string, mod, quickjsMod wazero.CompiledModule) func(ctx context.Context, r wazero.Runtime, c wazero.ModuleConfig) (func() error, error) {
+	return func(ctx context.Context, r wazero.Runtime, c wazero.ModuleConfig) (func() error, error) {
+		return func() error {
+			if _, err := r.InstantiateModule(ctx, quickjsMod, c.WithName("javy_quickjs_provider_v2")); err != nil {
+				return err
+			}
+			if _, err := r.InstantiateModule(ctx, mod, c.WithName(name)); err != nil {
+				return err
+			}
+			return nil
+		}, nil
+	}
 }
 
 func compileFunc(name string, wasm []byte, needsQuickJSProvider bool) func(ctx context.Context, r wazero.Runtime, c wazero.ModuleConfig) (func() error, error) {

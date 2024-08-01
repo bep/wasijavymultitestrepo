@@ -8,8 +8,10 @@ import (
 var katexWasm []byte
 
 var katexOptions = Options{
-	CompileModule: compileFunc("katex", katexWasm, true),
-	PoolSize:      8,
+	ModuleSource:         katexWasm,
+	ModuleName:           "katex",
+	NeedsQuickJSProvider: true,
+	PoolSize:             8,
 }
 
 // StartKatex starts a new dispatcher for the Katex module.

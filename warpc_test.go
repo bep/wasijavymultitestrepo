@@ -22,8 +22,18 @@ func (p person) GetID() uint32 {
 }
 
 func TestGreet(t *testing.T) {
+	tempDir := t.TempDir()
+
+	compilationCache, err := wazero.NewCompilationCacheWithDir(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	opts := Options{
-		CompileModule: compileFunc("greet", greetWasm, true),
+		ModuleSource:         greetWasm,
+		ModuleName:           "greet",
+		NeedsQuickJSProvider: true,
+		CompilationCache:     compilationCache,
 	}
 
 	d, err := Start[person, greeting](opts)
@@ -62,8 +72,10 @@ func BenchmarkKatexStartStop(b *testing.B) {
 	}
 
 	optsTemplate := Options{
-		CompileModule:    compileFunc("katex", katexWasm, true),
-		CompilationCache: compilationCache,
+		ModuleSource:         katexWasm,
+		ModuleName:           "katex",
+		NeedsQuickJSProvider: true,
+		CompilationCache:     compilationCache,
 	}
 
 	runBench := func(b *testing.B, opts Options) {
